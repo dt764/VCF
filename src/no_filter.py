@@ -30,6 +30,7 @@ class CoDec(EC.CoDec):
 
     def filter(self, img):
         logging.debug(f"trace y={img}")
+        logging.info("no filter")
         return img
 
 if __name__ == "__main__":

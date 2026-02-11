@@ -14,3 +14,4 @@ scalar_quantization @ git+https://github.com/vicente-gonzalez-ruiz/scalar_quanti
 DWT2D @ git+https://github.com/vicente-gonzalez-ruiz/DWT2D@master#egg=DWT2D
 bm3d
 #jupyterlab
+#torch

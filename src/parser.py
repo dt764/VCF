@@ -15,6 +15,17 @@ def decode(codec):
     return codec.decode()
 
 class CustomArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        # We use *args and **kwargs to catch everything (including 'color')
+        # and pass it straight to the original ArgumentParser
+        super().__init__(*args, **kwargs)
+
+    def exit(self, status=0, message=None):
+        if message:
+            self._print_message(message, None)
+        exit(status)
+
+class CustomArgumentParser_deleteme(argparse.ArgumentParser):
     def __init__(self,
                  prog=None,
                  usage=None,

@@ -93,6 +93,7 @@ class CoDec(CT.CoDec):
         
         y_128 = to_RGB(CT_y)
         y = y_128# + 128
+        y = CT.CoDec.filter(self, y)
         y = np.clip(y, 0, 255).astype(np.uint8)
         output_size = self.decode_write_fn(y, out_fn)
         self.BPP = (self.total_input_size*8)/(y.shape[0]*y.shape[1])
