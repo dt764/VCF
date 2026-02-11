@@ -2,21 +2,23 @@
 Stores residual frames as PNG, motion vectors and frame types as side information.
 Applies an external 2D transform codec for each frame residual.'''
 
-with open("/tmp/description.txt", "w") as f:
-    f.write(__doc__)
-
+import sys
+import main
+import parser
+import entropy_video_coding as EVC
 import os
 import logging
 import numpy as np
 from PIL import Image
 import av
 import importlib
-import parser
-import main
-from III import *
 import gzip
 
-# ------------------------------------------------------------
+with open("/tmp/description.txt", "w") as f:
+    f.write(__doc__)
+
+import re
+#------------------------------------------------------------
 # Argumentos específicos IPP
 # ------------------------------------------------------------
 
@@ -26,31 +28,52 @@ parser.parser_encode.add_argument("-G", "--gop_size", type=int, default=10)
 parser.parser_encode.add_argument("-b", "--block_size", type=int, default=16, help="IPP block size")
 parser.parser_encode.add_argument("-S", "--search_range", type=int, default=4)
 parser.parser_encode.add_argument("--lambda_rdo", type=float, default=0.01, help="IPP Lambda for RDO")
+parser.parser_encode.add_argument("-T", "--transform", type=str, 
+    help=f"2D-transform, default: {EVC.DEFAULT_TRANSFORM}", 
+    default=EVC.DEFAULT_TRANSFORM)
+parser.parser_encode.add_argument("-N", "--number_of_frames", type=parser.int_or_str, help=f"Number of frames to encode (default: {EVC.N_FRAMES})", default=f"{EVC.N_FRAMES}")
 
 parser.parser_decode.add_argument("-o", "--output_prefix", default="/tmp/ipp", help="Input directory")
 parser.parser_decode.add_argument("-G", "--gop_size", type=int, default=10)
 parser.parser_decode.add_argument("-b", "--block_size", type=int, default=16, help="IPP block size")
+parser.parser_decode.add_argument("-T", "--transform", type=str,
+    help=f"2D-transform, default: {EVC.DEFAULT_TRANSFORM}", 
+    default=EVC.DEFAULT_TRANSFORM)
+parser.parser_decode.add_argument("-N", "--number_of_frames", type=parser.int_or_str, help=f"Number of frames to decode (default: {EVC.N_FRAMES})", default=f"{EVC.N_FRAMES}")
 
+args = parser.parser.parse_known_args()[0]
 
+if __debug__:
+    if args.debug:
+        print(f"III: Importing {args.transform}")
 
-# ------------------------------------------------------------
-# CoDec
-# ------------------------------------------------------------
-class CoDec:
+try:
+    transform = importlib.import_module(args.transform)
+except ImportError as e:
+    print(f"Error: Could not find {args.transform} module ({e})")
+    print(f"Make sure '2D-{args.transform}.py' is in the same directory as III.py")
+    sys.exit(1)
+
+def is_valid_name(name):
+    pattern = r'^encoded_\d{4}\.png$'
+    return bool(re.match(pattern, name))
+
+class CoDec(EVC.CoDec):
     def __init__(self, args):
         self.args = args
         self.B = getattr(args, "block_size", None)
+        
         try:
             transform_module = importlib.import_module(args.transform)
         except ImportError as e:
             raise ImportError(f"Error: No se encontró el módulo {args.transform} ({e})")
+            
         self.transform_codec = transform_module.CoDec(args)
         logging.info(f"Using transform codec: {args.transform}")
 
     def bye(self):
         pass
 
-    # ----------------- ENCODE -----------------
     def encode(self):
         os.makedirs(self.args.output_prefix, exist_ok=True)
         container = av.open(self.args.input_prefix)
@@ -66,6 +89,9 @@ class CoDec:
             for frame in packet.decode():
                 curr = np.array(frame.to_image()).astype(np.int16)
                 H, W = curr.shape[:2]
+                orig_fn = f"{self.args.output_prefix}/original_{frame_idx:04d}.png"
+                Image.fromarray(curr.astype(np.uint8)).save(orig_fn)
+
 
                 # ---------------- Inicialización ----------------
                 mv = np.zeros((H // B, W // B, 2), dtype=np.int16)
@@ -125,7 +151,7 @@ class CoDec:
                     decoded_I = np.array(Image.open(decoded_I_png)).astype(np.int16)
                     decoded_P = np.array(Image.open(decoded_P_png)).astype(np.int16)
 
-                    # ---------------- Comparación bloque a bloque con RDO simplificado ----------------
+                    # Comparación bloque a bloque con RDO simplificado 
                     to_save_img = np.zeros_like(curr)
                     for y in range(0, H, B):
                         for x in range(0, W, B):
@@ -151,21 +177,15 @@ class CoDec:
                             J_P = D_P + LAMBDA * R_P
 
                             if J_I <= J_P:
-                                #to_save_img[y:y+B, x:x+B] = block_I
-                                #modes[by, bx] = 0
-                                #recon[y:y+B, x:x+B] = block_I
                                 to_save_img[y:y+B, x:x+B] = test_I[y:y+B, x:x+B]
                                 modes[by, bx] = 0
                                 recon[y:y+B, x:x+B] = test_I[y:y+B, x:x+B]
                             else:
-                                #to_save_img[y:y+B, x:x+B] = block_P
-                                #modes[by, bx] = 1
-                                #recon[y:y+B, x:x+B] = block_P
                                 to_save_img[y:y+B, x:x+B] = test_P[y:y+B, x:x+B]
                                 modes[by, bx] = 1
                                 recon[y:y+B, x:x+B] = recon_block
 
-                # ---------------- Guardar residual final ----------------
+                # Guardar residual final
                 residual_png = f"{self.args.output_prefix}/residual_{frame_idx:04d}.png"
                 residual_prefix = f"{self.args.output_prefix}/residual_{frame_idx:04d}"
                 Image.fromarray(np.clip(to_save_img, 0, 255).astype(np.uint8)).save(residual_png)
@@ -181,14 +201,13 @@ class CoDec:
                 frame_idx += 1
                 if self.args.number_of_frames and frame_idx >= self.args.number_of_frames:
                     break
-            
+
             if self.args.number_of_frames and frame_idx >= self.args.number_of_frames:
                 break
 
         logging.info("IPP encoding finished")
 
-
-    # ----------------- DECODE -----------------
+    # --- DECODE ---
     def decode(self):
         B = self.args.block_size
         GOP = self.args.gop_size
@@ -244,8 +263,6 @@ class CoDec:
             ref_frame = recon.copy()
             frame_idx += 1
 
-# ------------------------------------------------------------
-# MAIN
-# ------------------------------------------------------------
+
 if __name__ == "__main__":
     main.main(parser.parser, logging, CoDec)
